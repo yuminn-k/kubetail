@@ -310,11 +310,11 @@ async fn listen_for_changes(
 mod test {
     #![allow(clippy::unwrap_used)]
 
-    use std::{io::Write, path::Path, sync::LazyLock};
+    use std::{io::Write, path::Path, sync::LazyLock, time::Duration};
 
     use rstest::rstest;
     use tempfile::NamedTempFile;
-    use tokio::task;
+    use tokio::{task, time::timeout};
 
     use super::*;
 
@@ -596,6 +596,9 @@ mod test {
             .await;
         });
 
+        // Create a buffer to capture output
+        let mut output = Vec::new();
+
         // Wait until stream_forward goes into the wait loop to signal the writing thread to start.
         if is_follow {
             // Wait for WatcherStartedEvent
@@ -607,12 +610,19 @@ mod test {
             // Update the file with new lines
             update_test_file(test_file.path()).expect("Failed to update test file");
 
+            // Receive every expected line before cancelling, or the watcher may stop before reading them
+            timeout(Duration::from_secs(5), async {
+                while output.len() < expected_lines.len() {
+                    let Some(record) = rx.recv().await else { break };
+                    output.push(record);
+                }
+            })
+            .await
+            .expect("Timed out waiting for followed lines");
+
             // Stop watcher
             ctx.cancel()
         }
-
-        // Create a buffer to capture output
-        let mut output = Vec::new();
 
         while let Some(record) = rx.recv().await {
             output.push(record);
